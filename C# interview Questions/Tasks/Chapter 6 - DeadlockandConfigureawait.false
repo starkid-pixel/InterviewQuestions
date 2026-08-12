@@ -1,0 +1,441 @@
+============================================================
+IMPORTANT CLARIFICATION: WHY DOES THE DEADLOCK HAPPEN?
+============================================================
+
+Consider:
+
+async Task<string> GetDataAsync()
+{
+    await Task.Delay(5000);
+
+    return "Hello";
+}
+
+And the caller:
+
+string result = GetDataAsync().Result;
+
+
+STEP 1 — GetDataAsync starts on the UI Thread
+------------------------------------------------------------
+
+GetDataAsync()
+     |
+     v
+await Task.Delay(5000);
+
+
+When this await is actually executed, the await machinery checks the
+current context.
+
+Suppose we are running on a UI Thread.
+
+Conceptually:
+
+Current execution
+      |
+      v
+UI SynchronizationContext
+      |
+      v
+await Task.Delay(5000)
+
+
+The continuation can be associated with the captured UI context.
+
+
+IMPORTANT:
+
+The Task itself is not storing the UI Thread.
+
+The await/continuation machinery is arranging where the continuation
+should execute.
+
+
+============================================================
+STEP 2 — GetDataAsync suspends
+============================================================
+
+Task.Delay(5000) is not complete.
+
+Therefore:
+
+GetDataAsync
+     |
+     v
+suspends
+
+
+The caller then executes:
+
+.Result
+
+
+============================================================
+STEP 3 — .Result BLOCKS THE UI THREAD
+============================================================
+
+.Result means:
+
+"I want the result synchronously, so block this thread until the
+Task completes."
+
+
+Therefore:
+
+UI Thread
+     |
+     X
+BLOCKED
+
+
+The UI Thread is now waiting for GetDataAsync to complete.
+
+
+============================================================
+STEP 4 — FIVE SECONDS PASS
+============================================================
+
+Task.Delay completes.
+
+This is important:
+
+Task.Delay is now complete.
+
+But GetDataAsync is NOT necessarily complete yet.
+
+
+Why?
+
+Because the continuation still has to execute:
+
+return "Hello";
+
+
+The continuation is the code after await.
+
+
+============================================================
+STEP 5 — THE CONTINUATION NEEDS TO EXECUTE
+============================================================
+
+Conceptually:
+
+Task.Delay completes
+       |
+       v
+Continuation
+       |
+       v
+captured UI SynchronizationContext
+       |
+       v
+UI Thread
+
+
+The continuation contains:
+
+return "Hello";
+
+
+IMPORTANT:
+
+DO NOT SAY:
+
+"return "Hello" needs the UI Thread."
+
+
+That is not technically correct.
+
+
+The correct statement is:
+
+"The continuation containing return "Hello" was associated with the
+captured UI SynchronizationContext."
+
+
+The return statement itself does not inherently require the UI Thread.
+
+
+============================================================
+STEP 6 — THE UI THREAD IS BLOCKED
+============================================================
+
+But remember:
+
+UI Thread
+     |
+     X
+BLOCKED by .Result
+
+
+Therefore the UI Thread cannot execute the continuation.
+
+
+So:
+
+Continuation
+     |
+     v
+needs UI context
+     |
+     v
+UI Thread
+     |
+     X
+BLOCKED
+
+
+The continuation cannot execute.
+
+
+============================================================
+STEP 7 — THE CIRCULAR WAIT
+============================================================
+
+The UI Thread is saying:
+
+"I am waiting for GetDataAsync to complete."
+
+
+The GetDataAsync continuation is effectively saying:
+
+"I need the UI context to execute."
+
+
+The UI context requires the UI Thread.
+
+But:
+
+UI Thread
+     |
+     X
+is already blocked waiting for GetDataAsync.
+
+
+Therefore:
+
+UI Thread
+     |
+     | waits for
+     v
+GetDataAsync
+     |
+     | continuation needs
+     v
+UI Thread
+
+
+This is the circular wait.
+
+That is the classic deadlock.
+
+
+============================================================
+THE MOST IMPORTANT IDEA
+============================================================
+
+The deadlock does NOT happen simply because the SynchronizationContext
+was captured.
+
+The deadlock happens because:
+
+1. The continuation was associated with the UI context.
+2. The UI Thread was synchronously blocked using .Result or Wait().
+3. The continuation therefore cannot execute on the UI Thread.
+4. The async method cannot complete.
+5. The blocked caller is waiting for that async method.
+6. Both sides are waiting for each other.
+
+
+In short:
+
+Captured UI context
+        +
+Synchronous blocking of UI Thread
+        =
+possible classic deadlock
+
+
+============================================================
+WHY DOES AWAIT AVOID THIS?
+============================================================
+
+Instead of:
+
+string result = GetDataAsync().Result;
+
+
+use:
+
+string result = await GetDataAsync();
+
+
+Now the UI Thread is NOT synchronously blocked.
+
+Conceptually:
+
+UI Thread
+     |
+     v
+await GetDataAsync()
+     |
+     v
+UI Thread is free
+     |
+     v
+GetDataAsync completes
+     |
+     v
+continuation can execute
+     |
+     v
+result becomes available
+
+
+The important difference is:
+
+.Result:
+
+"Block the UI Thread until the Task completes."
+
+await:
+
+"Do not block the UI Thread; resume when the Task completes."
+
+
+============================================================
+WHERE DOES CONFIGUREAWAIT(FALSE) FIT?
+============================================================
+
+Consider:
+
+async Task<string> GetDataAsync()
+{
+    await Task.Delay(5000)
+              .ConfigureAwait(false);
+
+    return "Hello";
+}
+
+
+Now the await is saying:
+
+"I do not need the captured SynchronizationContext for my
+continuation."
+
+
+So:
+
+Task.Delay completes
+       |
+       v
+Continuation
+       |
+       X
+does not require captured UI context
+       |
+       v
+return "Hello"
+       |
+       v
+GetDataAsync completes
+
+
+Therefore the continuation does not have the same dependency on the
+blocked UI Thread.
+
+
+============================================================
+VERY IMPORTANT DISTINCTION
+============================================================
+
+await:
+
+"Asynchronously wait for the operation."
+
+
+ConfigureAwait(false):
+
+"I don't require the captured SynchronizationContext when continuing."
+
+
+Task.Run:
+
+"Schedule this synchronous work on the ThreadPool."
+
+
+Wait():
+
+"Synchronously block this Thread until the Task completes."
+
+
+.Result:
+
+"Synchronously block while obtaining the Task's result."
+
+
+These are different concepts.
+
+
+============================================================
+FINAL MENTAL MODEL
+============================================================
+
+Normal await in a UI context:
+
+await
+  |
+  v
+capture/use UI context for continuation
+  |
+  v
+operation completes
+  |
+  v
+continuation needs UI context
+  |
+  v
+UI Thread executes continuation
+
+
+Classic deadlock:
+
+await
+  |
+  v
+continuation associated with UI context
+  |
+  v
+.Result blocks UI Thread
+  |
+  v
+operation completes
+  |
+  v
+continuation needs UI Thread
+  |
+  X
+UI Thread is blocked
+  |
+  v
+continuation cannot execute
+  |
+  v
+Task cannot complete
+  |
+  v
+.Result keeps waiting
+
+
+The key sentence to remember:
+
+"The problem is not that the context was captured.
+The problem is that the captured context cannot execute the
+continuation because the thread associated with that context is
+synchronously blocked."
+
+
+============================================================
+END OF CLARIFICATION
+============================================================
