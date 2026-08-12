@@ -1,3 +1,6 @@
+
+
+
 # C# Abstract Class vs Interface — Decision Checklist
 
 ## Abstract Class — Checklist
