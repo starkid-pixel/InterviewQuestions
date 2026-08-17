@@ -1,0 +1,946 @@
+# C# `IEnumerable<T>` and `IQueryable<T>`
+
+## 1. Basic Idea
+
+The simplest way to remember the difference:
+
+> **`IEnumerable<T>` → enumerate a sequence, typically in memory.**
+
+> **`IQueryable<T>` → query a data source through a query provider, such as EF Core querying a database.**
+
+The important distinction is **where the query is executed**.
+
+---
+
+# 2. `IEnumerable<T>`
+
+`IEnumerable<T>` is an interface that represents a **sequence of elements that can be enumerated**.
+
+It is not specifically an interface for collections.
+
+Many collections implement `IEnumerable<T>`:
+
+```text
+List<T>
+Array
+HashSet<T>
+Queue<T>
+Stack<T>
+Dictionary<TKey, TValue>
+```
+
+The main capability provided by `IEnumerable<T>` is:
+
+> "I can give you my elements one by one."
+
+This allows:
+
+```csharp
+foreach (var item in sequence)
+{
+    // process item
+}
+```
+
+---
+
+## 3. Simple `IEnumerable<T>` Example
+
+Consider:
+
+```csharp
+class Employee
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public decimal Salary { get; set; }
+}
+```
+
+Create a list:
+
+```csharp
+List<Employee> employees = new List<Employee>
+{
+    new Employee { Id = 1, Name = "John", Salary = 40000 },
+    new Employee { Id = 2, Name = "David", Salary = 60000 },
+    new Employee { Id = 3, Name = "Mary", Salary = 70000 }
+};
+```
+
+Expose it as `IEnumerable<Employee>`:
+
+```csharp
+IEnumerable<Employee> result = employees;
+```
+
+This means:
+
+> `result` represents a sequence of `Employee` objects that can be enumerated.
+
+For example:
+
+```csharp
+foreach (Employee employee in result)
+{
+    Console.WriteLine(employee.Name);
+}
+```
+
+Output:
+
+```text
+John
+David
+Mary
+```
+
+---
+
+# 4. Why Use `IEnumerable<T>` Instead of `List<T>`?
+
+Consider:
+
+```csharp
+void PrintEmployees(List<Employee> employees)
+{
+}
+```
+
+This method specifically requires a `List<Employee>`.
+
+Instead:
+
+```csharp
+void PrintEmployees(IEnumerable<Employee> employees)
+{
+}
+```
+
+The method is saying:
+
+> "I don't care what collection you give me. I only need something that I can enumerate."
+
+Therefore, all of these can be passed if they implement `IEnumerable<Employee>`:
+
+```text
+List<Employee>
+Employee[]
+HashSet<Employee>
+Queue<Employee>
+```
+
+This is an example of programming against an abstraction rather than a concrete collection.
+
+---
+
+# 5. LINQ with `IEnumerable<T>`
+
+Suppose:
+
+```csharp
+List<Employee> employees = new List<Employee>
+{
+    new Employee { Id = 1, Name = "John", Salary = 40000 },
+    new Employee { Id = 2, Name = "David", Salary = 60000 },
+    new Employee { Id = 3, Name = "Mary", Salary = 70000 }
+};
+```
+
+Now:
+
+```csharp
+IEnumerable<Employee> result =
+    employees.Where(e => e.Salary > 50000);
+```
+
+The filtering is performed by .NET against the objects that are already in memory.
+
+Conceptually:
+
+```text
+List<Employee>
+       |
+       v
+Objects already in memory
+       |
+       v
+Where(e => e.Salary > 50000)
+       |
+       v
+LINQ to Objects
+       |
+       v
+David, Mary
+```
+
+There is no SQL involved.
+
+---
+
+# 6. `IQueryable<T>`
+
+`IQueryable<T>` represents a **query against a queryable data source through a query provider**.
+
+The most common example is Entity Framework Core.
+
+```csharp
+IQueryable<Employee> employees = db.Employees;
+```
+
+Here:
+
+```text
+db.Employees
+      |
+      v
+IQueryable<Employee>
+      |
+      v
+EF Core Query Provider
+      |
+      v
+Database
+```
+
+The important point is:
+
+> `IQueryable<T>` does not mean that all database data has already been loaded into memory.
+
+It represents a query that can be translated and executed by the query provider.
+
+---
+
+# 7. `IQueryable<T>` with EF Core
+
+Suppose the database contains:
+
+```text
+Employees
+--------------------------------
+Id    Name     Salary
+--------------------------------
+1     John     40000
+2     David    60000
+3     Mary     70000
+```
+
+Now write:
+
+```csharp
+IQueryable<Employee> employees = db.Employees;
+
+var result = employees
+    .Where(e => e.Salary > 50000);
+```
+
+At this point, the query has been **built**, but it has not necessarily been executed.
+
+Conceptually:
+
+```text
+C# LINQ expression
+       |
+       v
+.Where(e => e.Salary > 50000)
+       |
+       v
+IQueryable
+       |
+       v
+Query is being built
+       |
+       v
+No database execution yet
+```
+
+---
+
+# 8. When Does `IQueryable` Execute?
+
+Execution happens when the query is enumerated or materialized.
+
+For example:
+
+```csharp
+var employees = result.ToList();
+```
+
+Now EF Core processes the query.
+
+Conceptually:
+
+```text
+IQueryable
+     |
+     v
+ToList()
+     |
+     v
+EF Core Query Provider
+     |
+     v
+Translate LINQ expression
+     |
+     v
+SQL
+     |
+     v
+Database
+     |
+     v
+Results
+     |
+     v
+List<Employee>
+```
+
+EF Core may generate SQL similar to:
+
+```sql
+SELECT [e].[Id], [e].[Name], [e].[Salary]
+FROM [Employees] AS [e]
+WHERE [e].[Salary] > 50000;
+```
+
+The SQL is generated by EF Core.
+
+You did not have to write the SQL yourself.
+
+---
+
+# 9. Why Can EF Core Convert C# LINQ to SQL?
+
+Consider:
+
+```csharp
+e => e.Salary > 50000
+```
+
+For `IQueryable<T>`, the lambda can be represented as an **expression tree**.
+
+Conceptually, EF Core can inspect:
+
+```text
+Employee
+    |
+    +-- Salary
+           |
+           +-- > 50000
+```
+
+EF Core understands the expression and translates it into SQL:
+
+```sql
+WHERE Salary > 50000
+```
+
+This is different from executing an ordinary C# delegate.
+
+---
+
+# 10. Expression Tree vs Delegate
+
+This is an important interview distinction.
+
+## `IEnumerable<T>`
+
+LINQ to Objects generally works with delegates such as:
+
+```csharp
+Func<Employee, bool>
+```
+
+Conceptually:
+
+```text
+Lambda
+   |
+   v
+Delegate
+   |
+   v
+.NET executes C# code
+```
+
+## `IQueryable<T>`
+
+LINQ providers generally work with:
+
+```csharp
+Expression<Func<Employee, bool>>
+```
+
+Conceptually:
+
+```text
+Lambda
+   |
+   v
+Expression Tree
+   |
+   v
+Query Provider
+   |
+   v
+SQL / provider-specific query
+```
+
+The provider can inspect the expression instead of simply executing it as a normal .NET delegate.
+
+---
+
+# 11. Deferred Execution
+
+Both `IEnumerable<T>` and `IQueryable<T>` can use **deferred execution**.
+
+For example:
+
+```csharp
+var query = employees.Where(e => e.Salary > 50000);
+```
+
+The query is being constructed.
+
+Execution typically happens when the sequence is enumerated.
+
+For example:
+
+```csharp
+foreach (var employee in query)
+{
+    Console.WriteLine(employee.Name);
+}
+```
+
+Or when it is materialized:
+
+```csharp
+var list = query.ToList();
+```
+
+For EF Core:
+
+```csharp
+var query = db.Employees
+              .Where(e => e.Salary > 50000);
+
+// Query is built here.
+
+var list = query.ToList();
+
+// Database query is executed here.
+```
+
+Other common execution/materialization operations include:
+
+```csharp
+ToList()
+ToArray()
+First()
+FirstOrDefault()
+Single()
+SingleOrDefault()
+Count()
+Any()
+foreach
+```
+
+---
+
+# 12. Important Performance Difference
+
+Consider this:
+
+```csharp
+var employees = db.Employees
+    .ToList()
+    .Where(e => e.Salary > 50000);
+```
+
+`ToList()` executes the database query first.
+
+Conceptually:
+
+```text
+Database
+    |
+    v
+Retrieve ALL employees
+    |
+    v
+.NET memory
+    |
+    v
+Where(Salary > 50000)
+    |
+    v
+Filter in application
+```
+
+This can be inefficient if the table contains millions of rows.
+
+Prefer:
+
+```csharp
+var employees = db.Employees
+    .Where(e => e.Salary > 50000)
+    .ToList();
+```
+
+Now:
+
+```text
+IQueryable
+    |
+    v
+Where(Salary > 50000)
+    |
+    v
+EF Core
+    |
+    v
+SQL
+    |
+    v
+Database filters rows
+    |
+    v
+Only matching rows returned
+    |
+    v
+List<Employee>
+```
+
+This allows the database to perform the filtering.
+
+---
+
+# 13. `AsEnumerable()`
+
+`AsEnumerable()` is an important boundary between query-provider execution and LINQ-to-Objects execution.
+
+Example:
+
+```csharp
+var result = db.Employees
+    .Where(e => e.Salary > 50000)
+    .AsEnumerable()
+    .Where(e => SomeCSharpMethod(e));
+```
+
+Before `AsEnumerable()`:
+
+```text
+IQueryable
+    |
+    v
+EF Core
+    |
+    v
+SQL
+    |
+    v
+Database
+```
+
+After `AsEnumerable()`:
+
+```text
+IEnumerable
+    |
+    v
+LINQ to Objects
+    |
+    v
+.NET
+```
+
+Therefore:
+
+> `AsEnumerable()` effectively tells the code to continue the query as an in-memory enumerable sequence from that point.
+
+Be careful with this because moving to `IEnumerable` too early can cause more data to be retrieved from the database than necessary.
+
+---
+
+# 14. `ToList()` vs `AsEnumerable()`
+
+They are not the same.
+
+## `ToList()`
+
+```csharp
+var list = query.ToList();
+```
+
+This:
+
+1. Executes the query.
+2. Retrieves the results.
+3. Stores them in a `List<T>`.
+
+Conceptually:
+
+```text
+IQueryable
+    |
+    v
+Execute query
+    |
+    v
+Database
+    |
+    v
+Results
+    |
+    v
+List<T>
+```
+
+## `AsEnumerable()`
+
+```csharp
+var enumerable = query.AsEnumerable();
+```
+
+This changes how subsequent LINQ operations are interpreted, but it does not itself mean "create a List".
+
+Conceptually:
+
+```text
+IQueryable
+    |
+    v
+AsEnumerable()
+    |
+    v
+IEnumerable
+    |
+    v
+LINQ to Objects for subsequent operations
+```
+
+---
+
+# 15. Can a `List<T>` Be Converted to `IQueryable<T>`?
+
+Yes.
+
+```csharp
+List<Employee> employees = GetEmployees();
+
+IQueryable<Employee> query =
+    employees.AsQueryable();
+```
+
+Then you can write:
+
+```csharp
+var result = query
+    .Where(e => e.Salary > 50000);
+```
+
+However, this does **not** turn the List into a database query.
+
+The data is still in memory.
+
+Conceptually:
+
+```text
+List<Employee>
+      |
+      v
+AsQueryable()
+      |
+      v
+IQueryable<Employee>
+      |
+      v
+In-memory query provider
+      |
+      v
+Memory
+```
+
+Therefore, if you already have a `List<T>`, there is usually no reason to convert it to `IQueryable<T>` just to perform ordinary in-memory LINQ.
+
+---
+
+# 16. `IQueryable<T>` Is Not Limited to Databases
+
+Do not define `IQueryable<T>` as:
+
+> "`IQueryable` means the data is in the database."
+
+That is too broad.
+
+The precise definition is:
+
+> **`IQueryable<T>` represents a queryable sequence whose query can be interpreted by a query provider.**
+
+A database is a very common example.
+
+With EF Core:
+
+```text
+IQueryable
+    |
+    v
+EF Core Query Provider
+    |
+    v
+SQL
+    |
+    v
+Database
+```
+
+Other query providers can theoretically target other data sources or query languages.
+
+For practical C# + EF Core interviews, however, this mental model is useful:
+
+```text
+IEnumerable<T>
+    → In-memory sequence
+    → LINQ to Objects
+
+IQueryable<T>
+    → Queryable data source
+    → Query Provider
+    → EF Core
+    → SQL
+    → Database
+```
+
+---
+
+# 17. Relationship Between `IEnumerable<T>` and `IQueryable<T>`
+
+`IQueryable<T>` derives from `IEnumerable<T>`.
+
+Conceptually:
+
+```text
+IEnumerable<T>
+       ^
+       |
+IQueryable<T>
+```
+
+This means an `IQueryable<T>` can also be enumerated.
+
+For example:
+
+```csharp
+IQueryable<Employee> query = db.Employees;
+
+foreach (Employee employee in query)
+{
+    // Query execution occurs during enumeration.
+}
+```
+
+But the execution model is different.
+
+```text
+IEnumerable<T>
+    |
+    +-- Enumeration
+    |
+    +-- LINQ to Objects
+    |
+    +-- .NET/in-memory execution
+
+
+IQueryable<T>
+    |
+    +-- Enumeration
+    |
+    +-- Query Provider
+    |
+    +-- Provider-specific execution
+    |
+    +-- SQL/database in the EF Core case
+```
+
+---
+
+# 18. Side-by-Side Example
+
+## `IEnumerable`
+
+```csharp
+List<Employee> employees = GetEmployees();
+
+IEnumerable<Employee> result =
+    employees.Where(e => e.Salary > 50000);
+
+var list = result.ToList();
+```
+
+Flow:
+
+```text
+List<Employee>
+     |
+     v
+Data already in memory
+     |
+     v
+Where()
+     |
+     v
+LINQ to Objects
+     |
+     v
+ToList()
+     |
+     v
+List<Employee>
+```
+
+No SQL is involved.
+
+---
+
+## `IQueryable`
+
+```csharp
+IQueryable<Employee> employees =
+    db.Employees;
+
+IQueryable<Employee> result =
+    employees.Where(e => e.Salary > 50000);
+
+var list = result.ToList();
+```
+
+Flow:
+
+```text
+db.Employees
+     |
+     v
+IQueryable<Employee>
+     |
+     v
+Where()
+     |
+     v
+Expression Tree
+     |
+     v
+EF Core Query Provider
+     |
+     v
+SQL
+     |
+     v
+Database
+     |
+     v
+Results
+     |
+     v
+List<Employee>
+```
+
+---
+
+# 19. Most Important Mental Model
+
+Think of `IEnumerable<T>` as:
+
+> **"I already have the sequence. Give me the elements and let .NET process them."**
+
+Think of `IQueryable<T>` as:
+
+> **"I have a queryable data source. Let the query provider understand my query and execute it at the data source."**
+
+For EF Core:
+
+```text
+IEnumerable
+    → Objects in memory
+    → .NET processes them
+
+
+IQueryable
+    → Database query
+    → EF Core translates LINQ to SQL
+    → Database processes the query
+```
+
+---
+
+# 20. Interview Answer
+
+If asked:
+
+### "What is the difference between `IEnumerable` and `IQueryable`?"
+
+A strong answer is:
+
+> **"`IEnumerable<T>` represents a sequence that can be enumerated, and when the source is already in memory, LINQ operations are performed by .NET using LINQ to Objects. `IQueryable<T>` represents a queryable data source and uses a query provider. With EF Core, the provider builds an expression tree, translates the LINQ query into SQL, and executes it against the database. Both can use deferred execution, and execution generally occurs when the query is enumerated or materialized."**
+
+### One-line version
+
+> **`IEnumerable` → process an enumerable sequence, typically in memory.**
+>
+> **`IQueryable` → describe a query for a query provider, which can execute it at the data source.**
+
+---
+
+# 21. Quick Reference
+
+| Concept | `IEnumerable<T>` | `IQueryable<T>` |
+|---|---|---|
+| Represents | Enumerable sequence | Queryable sequence |
+| Typical source | List, array, collection | Database/query provider |
+| LINQ implementation | LINQ to Objects | LINQ provider |
+| Lambda representation | Delegate | Expression tree |
+| Execution | Usually in .NET/in memory | Provider determines execution |
+| EF Core SQL translation | No | Yes |
+| Database filtering | No, if already materialized | Yes, when provider can translate |
+| Deferred execution | Yes | Yes |
+| `ToList()` | Materializes in memory | Executes provider query and materializes results |
+| `AsEnumerable()` | N/A / already enumerable | Switches subsequent operations to `IEnumerable` semantics |
+| Can enumerate with `foreach` | Yes | Yes |
+
+---
+
+# 22. Final Interview Memory
+
+Remember these four statements:
+
+1. **`IEnumerable<T>` is an interface representing a sequence that can be enumerated.**
+
+2. **When the source is already in memory, LINQ over `IEnumerable<T>` is generally executed by .NET.**
+
+3. **`IQueryable<T>` represents a queryable sequence backed by a query provider.**
+
+4. **With EF Core, the provider can translate the LINQ expression into SQL and execute it against the database.**
+
+The most important flow to remember is:
+
+```text
+IEnumerable
+    ↓
+LINQ
+    ↓
+.NET / Memory
+
+
+IQueryable
+    ↓
+LINQ expression
+    ↓
+Expression Tree
+    ↓
+Query Provider
+    ↓
+SQL
+    ↓
+Database
+```
