@@ -1619,3 +1619,1555 @@ When given a design problem, consider:
 The original 12 dimensions remain the core design-thinking checklist.
 
 **Modularization and extensibility** can be treated as an additional architectural lens, especially when designing large applications, frameworks, or plugin-based systems.
+
+
+---
+
+# 24. Practical Design and Implementation Scenarios
+
+This section focuses on scenarios that should be practiced as **working demonstrations**, not only explained theoretically.
+
+For each scenario, practice this interview flow:
+
+```text
+1. Understand the problem
+        ↓
+2. State assumptions
+        ↓
+3. Explain the naive approach
+        ↓
+4. Identify its limitations
+        ↓
+5. Design the improved approach
+        ↓
+6. Implement a small working version
+        ↓
+7. Explain trade-offs
+        ↓
+8. Discuss how production requirements could change the design
+```
+
+---
+
+# 25. Data Caching
+
+## Scenario
+
+A WPF application frequently requests device configuration from a backend.
+
+The configuration:
+
+- Is expensive to retrieve.
+- Does not change frequently.
+- Is used by multiple screens.
+
+The question is:
+
+> How can we avoid repeatedly calling the backend while keeping the data reasonably fresh?
+
+---
+
+## Naive Approach
+
+Every ViewModel directly calls the backend.
+
+```text
+View A ───────► Backend
+View B ───────► Backend
+View C ───────► Backend
+```
+
+Problems:
+
+- Repeated network calls.
+- Higher latency.
+- Increased backend load.
+- Multiple requests for the same data.
+
+---
+
+## Improved Design
+
+Introduce a cache.
+
+```text
+ViewModel
+    ↓
+Configuration Service
+    ↓
+Check Cache
+    │
+    ├── Cache Hit ─────► Return Cached Data
+    │
+    └── Cache Miss
+             ↓
+          Backend
+             ↓
+           Cache
+             ↓
+          Return Data
+```
+
+---
+
+## Simple Cache Implementation
+
+```csharp
+public interface IConfigurationService
+{
+    Task<DeviceConfiguration> GetConfigurationAsync(
+        string deviceId,
+        CancellationToken cancellationToken);
+}
+
+public sealed class ConfigurationService : IConfigurationService
+{
+    private readonly IBackendClient _backendClient;
+
+    private readonly Dictionary<string, CacheEntry>
+        _cache = new();
+
+    private readonly object _sync = new();
+
+    private readonly TimeSpan _cacheDuration =
+        TimeSpan.FromMinutes(5);
+
+    public ConfigurationService(IBackendClient backendClient)
+    {
+        _backendClient = backendClient;
+    }
+
+    public async Task<DeviceConfiguration> GetConfigurationAsync(
+        string deviceId,
+        CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            if (_cache.TryGetValue(deviceId, out var entry) &&
+                entry.ExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return entry.Configuration;
+            }
+        }
+
+        var configuration =
+            await _backendClient.GetConfigurationAsync(
+                deviceId,
+                cancellationToken);
+
+        lock (_sync)
+        {
+            _cache[deviceId] = new CacheEntry(
+                configuration,
+                DateTimeOffset.UtcNow.Add(_cacheDuration));
+        }
+
+        return configuration;
+    }
+
+    private sealed record CacheEntry(
+        DeviceConfiguration Configuration,
+        DateTimeOffset ExpiresAt);
+}
+```
+
+---
+
+## Cache Invalidation
+
+Caching is easy.
+
+Knowing when cached data is no longer valid is harder.
+
+Possible strategies:
+
+### Time-Based Expiration
+
+```text
+Cache Data
+    ↓
+Valid for 5 minutes
+    ↓
+Expire
+    ↓
+Reload on next request
+```
+
+### Explicit Invalidation
+
+When configuration changes:
+
+```csharp
+public void Invalidate(string deviceId)
+{
+    lock (_sync)
+    {
+        _cache.Remove(deviceId);
+    }
+}
+```
+
+### Event-Based Invalidation
+
+```text
+Backend Configuration Changed
+            ↓
+ConfigurationChanged Event
+            ↓
+Invalidate Cache
+```
+
+---
+
+## Important Production Consideration
+
+The simple implementation can allow multiple simultaneous requests to miss the cache and all call the backend.
+
+This is sometimes called a cache stampede problem.
+
+A more advanced design can coordinate concurrent loading.
+
+```text
+Request 1 ──┐
+Request 2 ──┼──► One Backend Request
+Request 3 ──┘
+                  ↓
+               Cache
+                  ↓
+          All Requests Continue
+```
+
+Possible implementation approaches:
+
+- Per-key locking.
+- `Lazy<Task<T>>`.
+- `ConcurrentDictionary`.
+- A dedicated cache implementation.
+
+---
+
+## How to Demo It
+
+Create a fake backend that delays for one second:
+
+```csharp
+public sealed class FakeBackendClient : IBackendClient
+{
+    public async Task<DeviceConfiguration>
+        GetConfigurationAsync(
+            string deviceId,
+            CancellationToken cancellationToken)
+    {
+        Console.WriteLine(
+            $"Backend called for {deviceId}");
+
+        await Task.Delay(
+            TimeSpan.FromSeconds(1),
+            cancellationToken);
+
+        return new DeviceConfiguration(deviceId);
+    }
+}
+```
+
+Call the service multiple times.
+
+Expected demonstration:
+
+```text
+First request
+    ↓
+Backend called
+    ↓
+Slow response
+
+Second request
+    ↓
+Cache hit
+    ↓
+Fast response
+```
+
+---
+
+## Interview Discussion
+
+### Pros
+
+- Reduced backend calls.
+- Faster response.
+- Lower latency.
+- Simple for read-heavy data.
+
+### Cons
+
+- Stale data.
+- Memory consumption.
+- Invalidation complexity.
+- Thread-safety requirements.
+
+### Follow-Up Questions
+
+1. What should be cached?
+2. What should not be cached?
+3. How do you invalidate the cache?
+4. What happens when the cache becomes too large?
+5. How do you handle concurrent cache misses?
+6. How do you prevent stale data from causing incorrect behavior?
+7. How would you cache large pages of data?
+
+---
+
+# 26. Responsive UI: Async, Progress, Cancellation, and Error Handling
+
+## Scenario
+
+The user clicks a button to load a large amount of data.
+
+The application must:
+
+- Keep the UI responsive.
+- Show progress.
+- Allow cancellation.
+- Prevent multiple concurrent loads.
+- Handle errors.
+
+---
+
+## Naive Approach
+
+```csharp
+public void Load()
+{
+    var data = _service.LoadLargeData();
+
+    Items.Clear();
+
+    foreach (var item in data)
+    {
+        Items.Add(item);
+    }
+}
+```
+
+Problem:
+
+```text
+UI Thread
+    ↓
+Long Operation
+    ↓
+UI cannot process input
+    ↓
+Application appears frozen
+```
+
+---
+
+## Improved ViewModel Design
+
+```csharp
+public sealed class DataViewModel : ViewModelBase
+{
+    private readonly IDataService _dataService;
+
+    private CancellationTokenSource? _cts;
+
+    private bool _isLoading;
+
+    private int _progress;
+
+    public bool IsLoading
+    {
+        get => _isLoading;
+        private set => SetProperty(ref _isLoading, value);
+    }
+
+    public int Progress
+    {
+        get => _progress;
+        private set => SetProperty(ref _progress, value);
+    }
+
+    public ObservableCollection<DataItem> Items { get; } = new();
+
+    public DataViewModel(IDataService dataService)
+    {
+        _dataService = dataService;
+    }
+
+    public async Task LoadAsync()
+    {
+        if (IsLoading)
+        {
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            IsLoading = true;
+
+            var progress =
+                new Progress<int>(
+                    value => Progress = value);
+
+            var data =
+                await _dataService.LoadAsync(
+                    progress,
+                    _cts.Token);
+
+            Items.Clear();
+
+            foreach (var item in data)
+            {
+                Items.Add(item);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected cancellation.
+        }
+        catch (Exception ex)
+        {
+            // Log error and expose user-friendly state.
+            ErrorMessage = ex.Message;
+        }
+        finally
+        {
+            IsLoading = false;
+
+            _cts.Dispose();
+            _cts = null;
+        }
+    }
+
+    public void Cancel()
+    {
+        _cts?.Cancel();
+    }
+}
+```
+
+---
+
+## WPF Demo
+
+```xml
+<Grid>
+
+    <Button
+        Content="Load"
+        Command="{Binding LoadCommand}"
+        IsEnabled="{Binding IsLoading,
+            Converter={StaticResource InverseBooleanConverter}}" />
+
+    <Button
+        Content="Cancel"
+        Command="{Binding CancelCommand}"
+        IsEnabled="{Binding IsLoading}" />
+
+    <ProgressBar
+        Minimum="0"
+        Maximum="100"
+        Value="{Binding Progress}" />
+
+</Grid>
+```
+
+---
+
+## How to Demo It
+
+Use a fake service:
+
+```csharp
+public async Task<IReadOnlyList<DataItem>> LoadAsync(
+    IProgress<int> progress,
+    CancellationToken cancellationToken)
+{
+    var result = new List<DataItem>();
+
+    for (var i = 1; i <= 100; i++)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await Task.Delay(50, cancellationToken);
+
+        result.Add(new DataItem(i));
+
+        progress.Report(i);
+    }
+
+    return result;
+}
+```
+
+Demonstrate:
+
+```text
+Click Load
+    ↓
+UI remains responsive
+    ↓
+Progress increases
+    ↓
+Click Cancel
+    ↓
+Operation stops
+```
+
+---
+
+## Important Interview Point
+
+`async/await` does not automatically make every operation run on a background thread.
+
+Ask:
+
+```text
+Is the operation I/O-bound?
+        ↓
+Use naturally asynchronous APIs where possible
+
+Is the operation CPU-bound?
+        ↓
+Consider background execution carefully
+```
+
+---
+
+# 27. Performance: Large Collection Scenario
+
+## Scenario
+
+A backend returns 100,000 records.
+
+The application is slow.
+
+A weak answer is:
+
+> "I would optimize the code."
+
+A stronger answer is:
+
+> "First I would measure and identify whether the bottleneck is data retrieval, processing, memory allocation, or UI rendering."
+
+---
+
+## Investigation Flow
+
+```text
+Application is Slow
+        ↓
+Measure
+        ↓
+Where is the Time?
+        │
+        ├── Backend?
+        ├── CPU?
+        ├── Memory / GC?
+        ├── Disk?
+        └── UI Rendering?
+```
+
+---
+
+## Common Bad Approach
+
+```csharp
+var records = await _service.GetAllAsync();
+
+foreach (var record in records)
+{
+    Records.Add(record);
+}
+```
+
+Potential problems:
+
+- Large memory allocation.
+- Thousands of collection change notifications.
+- Thousands of UI updates.
+- UI rendering overhead.
+
+---
+
+## Improved Approach: Batch Updates
+
+One approach is to receive data in batches.
+
+```text
+Backend
+   ↓
+Batch of 500
+   ↓
+Process
+   ↓
+Update UI
+   ↓
+Next Batch
+```
+
+The exact implementation depends on collection requirements.
+
+For example, a custom bulk collection can suppress repeated notifications and raise a reset notification after a batch.
+
+Conceptually:
+
+```csharp
+public void AddRange(IEnumerable<DataItem> items)
+{
+    foreach (var item in items)
+    {
+        Items.Add(item);
+    }
+
+    RaiseCollectionReset();
+}
+```
+
+Use bulk updates carefully because a full reset can also cause significant UI work.
+
+---
+
+## Performance Interview Checklist
+
+Before optimizing:
+
+1. What is the baseline?
+2. What metric is slow?
+3. Is the bottleneck CPU, memory, I/O, or UI?
+4. Can unnecessary work be removed?
+5. Can work be batched?
+6. Can work be deferred?
+7. Can only visible data be rendered?
+8. Can only required data be loaded?
+
+---
+
+# 28. Concurrent Read and Write Scenarios
+
+## Scenario
+
+A shared data store is updated by one component while other components need to read it.
+
+Question:
+
+> Should reads happen while writes are happening?
+
+The answer is:
+
+> It depends on the consistency and performance requirements.
+
+There is no single correct synchronization strategy.
+
+---
+
+## Approach 1: Exclusive Access with `lock`
+
+```csharp
+public sealed class SharedStore
+{
+    private readonly object _sync = new();
+
+    private readonly List<DataItem> _items = new();
+
+    public void Write(DataItem item)
+    {
+        lock (_sync)
+        {
+            _items.Add(item);
+        }
+    }
+
+    public IReadOnlyList<DataItem> Read()
+    {
+        lock (_sync)
+        {
+            return _items.ToList();
+        }
+    }
+}
+```
+
+### Behavior
+
+```text
+Reader + Reader  → Only one enters at a time
+Reader + Writer  → Exclusive
+Writer + Writer  → Exclusive
+```
+
+### Pros
+
+- Simple.
+- Easy to reason about.
+- Good starting point.
+
+### Cons
+
+- Readers unnecessarily block each other.
+- Can become a bottleneck with many readers.
+
+---
+
+## Approach 2: `ReaderWriterLockSlim`
+
+```csharp
+public sealed class SharedStore
+{
+    private readonly ReaderWriterLockSlim _lock = new();
+
+    private readonly List<DataItem> _items = new();
+
+    public void Write(DataItem item)
+    {
+        _lock.EnterWriteLock();
+
+        try
+        {
+            _items.Add(item);
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
+    public IReadOnlyList<DataItem> Read()
+    {
+        _lock.EnterReadLock();
+
+        try
+        {
+            return _items.ToList();
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+    }
+}
+```
+
+### Behavior
+
+```text
+Reader + Reader  ✓
+Reader + Writer  ✗
+Writer + Writer  ✗
+```
+
+### Pros
+
+- Multiple readers can run concurrently.
+- Better for read-heavy workloads.
+
+### Cons
+
+- More complex.
+- Not automatically the best choice.
+- Does not fit naturally across `await` points.
+
+---
+
+## Approach 3: Producer–Consumer Instead of Shared Mutable State
+
+Sometimes the better design is to avoid concurrent reads and writes against the same collection.
+
+```text
+Producer
+    ↓
+Bounded Buffer
+    ↓
+Consumer
+    ↓
+Process
+```
+
+This changes the problem from:
+
+```text
+"How do I protect shared mutable state?"
+```
+
+to:
+
+```text
+"How do I safely transfer ownership of data?"
+```
+
+This can be easier to reason about.
+
+---
+
+# 29. Buffering and Backpressure
+
+## Scenario
+
+Hardware produces:
+
+```text
+1,000 messages / second
+```
+
+The processing layer can handle:
+
+```text
+200 messages / second
+```
+
+Without a strategy:
+
+```text
+Producer
+    ↓↓↓↓↓↓↓↓↓↓↓
+Unbounded Queue
+    ↓
+Memory continues growing
+```
+
+---
+
+## Bounded Buffer
+
+```text
+Producer
+    ↓
+┌──────────────────┐
+│ Bounded Channel  │
+│ Capacity = 1,000 │
+└──────────────────┘
+    ↓
+Consumer
+```
+
+A modern C# approach is `Channel<T>`.
+
+```csharp
+public sealed class DataPipeline
+{
+    private readonly Channel<DataItem> _channel =
+        Channel.CreateBounded<DataItem>(
+            new BoundedChannelOptions(1000)
+            {
+                FullMode =
+                    BoundedChannelFullMode.Wait
+            });
+
+    public async Task ProduceAsync(
+        DataItem item,
+        CancellationToken cancellationToken)
+    {
+        await _channel.Writer.WriteAsync(
+            item,
+            cancellationToken);
+    }
+
+    public async Task ConsumeAsync(
+        CancellationToken cancellationToken)
+    {
+        await foreach (var item in
+            _channel.Reader.ReadAllAsync(cancellationToken))
+        {
+            await ProcessAsync(item, cancellationToken);
+        }
+    }
+
+    private Task ProcessAsync(
+        DataItem item,
+        CancellationToken cancellationToken)
+    {
+        // Process item.
+        return Task.CompletedTask;
+    }
+}
+```
+
+---
+
+## What is Backpressure?
+
+Backpressure means:
+
+> When the consumer cannot keep up, the producer must slow down, wait, or follow a defined overflow strategy.
+
+Possible strategies:
+
+```text
+Buffer Full
+    │
+    ├── Wait
+    ├── Drop Oldest
+    ├── Drop Newest
+    ├── Drop Current
+    └── Reject / Fail
+```
+
+The correct choice depends on the domain.
+
+For example:
+
+### Telemetry UI
+
+The latest value may be more important than every historical update.
+
+Dropping old updates may be acceptable.
+
+### Financial Transaction
+
+Dropping data may be unacceptable.
+
+The producer may need to wait or persist data instead.
+
+---
+
+## Demo Idea
+
+Create:
+
+- One producer generating data every 10 ms.
+- One consumer processing data every 100 ms.
+- A bounded channel with capacity 100.
+
+Observe what happens when the consumer cannot keep up.
+
+Then change:
+
+```csharp
+FullMode = BoundedChannelFullMode.Wait
+```
+
+and compare it with another overflow strategy.
+
+---
+
+# 30. Paging and Data Virtualization
+
+## Scenario
+
+The database contains:
+
+```text
+1,000,000 records
+```
+
+Do not immediately load all records.
+
+Instead:
+
+```text
+UI
+ ↓
+Request Page 1
+ ↓
+Backend
+ ↓
+Return 100 Records
+ ↓
+Display
+```
+
+When needed:
+
+```text
+Page 2
+ ↓
+Page 3
+ ↓
+Page 4
+```
+
+---
+
+## Simple Paging Contract
+
+```csharp
+public sealed record PageRequest(
+    int PageNumber,
+    int PageSize);
+
+public sealed record PageResult<T>(
+    IReadOnlyList<T> Items,
+    int TotalCount);
+
+public interface ICustomerService
+{
+    Task<PageResult<Customer>> GetCustomersAsync(
+        PageRequest request,
+        CancellationToken cancellationToken);
+}
+```
+
+---
+
+## ViewModel Example
+
+```csharp
+public sealed class CustomersViewModel : ViewModelBase
+{
+    private readonly ICustomerService _customerService;
+
+    public ObservableCollection<Customer> Customers { get; } =
+        new();
+
+    private int _currentPage = 1;
+
+    private const int PageSize = 100;
+
+    public async Task LoadPageAsync(
+        int pageNumber,
+        CancellationToken cancellationToken)
+    {
+        var result =
+            await _customerService.GetCustomersAsync(
+                new PageRequest(
+                    pageNumber,
+                    PageSize),
+                cancellationToken);
+
+        Customers.Clear();
+
+        foreach (var customer in result.Items)
+        {
+            Customers.Add(customer);
+        }
+
+        _currentPage = pageNumber;
+    }
+}
+```
+
+---
+
+## Offset Paging vs Cursor Paging
+
+### Offset Paging
+
+```text
+Page 1 → Offset 0
+Page 2 → Offset 100
+Page 3 → Offset 200
+```
+
+Simple but can become inefficient for very large datasets depending on the data source.
+
+### Cursor Paging
+
+```text
+Give me the next 100 records after ID 5000
+```
+
+Often better for sequential navigation through very large datasets.
+
+---
+
+## Page Caching
+
+If the user frequently moves:
+
+```text
+Page 1
+   ↓
+Page 2
+   ↓
+Page 3
+   ↓
+Back to Page 2
+```
+
+We can cache recently used pages.
+
+```text
+Page Request
+    ↓
+Page Cache
+    │
+    ├── Hit → Return
+    │
+    └── Miss
+           ↓
+        Backend
+           ↓
+         Cache
+```
+
+The cache should be bounded to prevent unlimited memory growth.
+
+---
+
+# 31. WPF UI Virtualization
+
+## Problem
+
+Suppose there are:
+
+```text
+1,000,000 data items
+```
+
+Creating one WPF visual element for every item is expensive.
+
+Without virtualization:
+
+```text
+1,000,000 Data Items
+        ↓
+1,000,000 UI Elements
+        ↓
+High Memory
+Slow Layout
+Slow Rendering
+```
+
+---
+
+## UI Virtualization
+
+With virtualization:
+
+```text
+1,000,000 Data Items
+        ↓
+Only visible items
+        ↓
+Create corresponding UI elements
+```
+
+Example:
+
+```xml
+<ListBox
+    ItemsSource="{Binding Customers}"
+    VirtualizingPanel.IsVirtualizing="True"
+    VirtualizingPanel.VirtualizationMode="Recycling"
+    ScrollViewer.CanContentScroll="True" />
+```
+
+---
+
+## Recycling
+
+Without recycling:
+
+```text
+Scroll
+   ↓
+Destroy old UI container
+   ↓
+Create new container
+```
+
+With recycling:
+
+```text
+Scroll
+   ↓
+Reuse existing UI container
+   ↓
+Bind it to the next item
+```
+
+This reduces allocations and container creation.
+
+---
+
+## Important Distinction
+
+These concepts solve different problems:
+
+```text
+Paging
+    =
+Load only a subset of data
+
+Data Virtualization
+    =
+Load data only when required
+
+UI Virtualization
+    =
+Create UI elements only for visible data
+```
+
+They can be used together.
+
+Example:
+
+```text
+Database
+    ↓
+Paging / Data Virtualization
+    ↓
+Limited Data in Client
+    ↓
+UI Virtualization
+    ↓
+Only Visible UI Elements
+```
+
+---
+
+## Common Virtualization Pitfalls
+
+Virtualization can be reduced or disabled depending on how the control is used.
+
+Things to investigate when virtualization is not working as expected include:
+
+- The items panel being replaced with a non-virtualizing panel.
+- Wrapping a virtualizing control inside a parent scroll viewer.
+- `ScrollViewer.CanContentScroll` configuration.
+- Layout and grouping behavior.
+
+The first step should always be to measure and verify actual UI behavior rather than assuming virtualization is active.
+
+---
+
+# 32. Combined End-to-End Scenario
+
+## Scenario
+
+A hardware device produces high-frequency data.
+
+The application:
+
+- Receives data continuously.
+- Must not block the UI.
+- Must avoid unlimited memory growth.
+- Displays a large history.
+- Allows paging through historical data.
+- Should cache configuration.
+- Must support concurrent reading and writing safely.
+
+A possible architecture:
+
+```text
+Hardware
+   │
+   ▼
+Data Receiver
+   │
+   ▼
+Bounded Channel
+   │
+   ├──────────────► Background Processing
+   │                     │
+   │                     ▼
+   │                 Data Store
+   │                     │
+   │                     ├── Current State
+   │                     └── Historical Data
+   │
+   ▼
+Batch / Sample Updates
+   │
+   ▼
+ViewModel
+   │
+   ▼
+WPF UI
+   │
+   ├── UI Virtualization
+   └── Paging / Incremental Loading
+```
+
+Configuration can follow:
+
+```text
+ViewModel
+    ↓
+Configuration Service
+    ↓
+Memory Cache
+    ↓
+Backend if Cache Miss
+```
+
+---
+
+## Suggested Interview Walkthrough
+
+When given this scenario, start with:
+
+### Step 1 — Clarify Requirements
+
+Ask:
+
+- How much data per second?
+- Can messages be dropped?
+- What latency is acceptable?
+- How much history must be retained?
+- Is ordering required?
+- Can the UI show sampled data?
+- Is persistence required?
+
+### Step 2 — Separate Data Flow from UI
+
+```text
+Hardware
+    ↓
+Processing Pipeline
+    ↓
+Data Store
+    ↓
+ViewModel
+    ↓
+UI
+```
+
+Do not directly update the UI for every incoming message.
+
+### Step 3 — Handle Producer/Consumer Speed Differences
+
+Use:
+
+```text
+Bounded Buffer
+```
+
+Define overflow behavior based on business requirements.
+
+### Step 4 — Batch UI Updates
+
+Instead of:
+
+```text
+1000 incoming events
+        ↓
+1000 UI updates
+```
+
+Use:
+
+```text
+1000 incoming events
+        ↓
+Batch / Sample
+        ↓
+10–60 UI updates
+```
+
+The exact update frequency should be driven by responsiveness and business requirements.
+
+### Step 5 — Limit Data in Memory
+
+Use:
+
+- Bounded buffers.
+- Paging.
+- Data virtualization.
+- Retention policies.
+- Streaming where appropriate.
+
+### Step 6 — Render Efficiently
+
+Use UI virtualization for large item controls.
+
+### Step 7 — Measure
+
+Measure:
+
+- CPU.
+- Memory.
+- Allocation rate.
+- GC activity.
+- Queue length.
+- Processing latency.
+- UI responsiveness.
+
+---
+
+# Practical Implementation Exercises
+
+These exercises should be implemented and demonstrated.
+
+## Exercise 1 — Configuration Cache
+
+Build:
+
+```text
+Fake Backend
+      ↓
+Configuration Service
+      ↓
+In-Memory Cache
+```
+
+Demo:
+
+- First request is slow.
+- Second request is fast.
+- Cache expiration causes reload.
+- Explicit invalidation causes reload.
+
+---
+
+## Exercise 2 — Responsive UI
+
+Build:
+
+```text
+Button
+   ↓
+Async Operation
+   ↓
+Progress Bar
+   ↓
+Cancellation
+```
+
+Demo:
+
+- UI remains responsive.
+- Progress updates.
+- Cancellation works.
+- Multiple concurrent loads are prevented.
+
+---
+
+## Exercise 3 — Read/Write Synchronization
+
+Implement the same shared store using:
+
+1. `lock`
+2. `ReaderWriterLockSlim`
+
+Demo:
+
+- Multiple reader tasks.
+- One writer task.
+- Compare behavior and discuss trade-offs.
+
+---
+
+## Exercise 4 — Producer/Consumer
+
+Build:
+
+```text
+Fast Producer
+      ↓
+Bounded Channel
+      ↓
+Slow Consumer
+```
+
+Demo:
+
+- Queue pressure.
+- Backpressure.
+- Different overflow strategies.
+- Cancellation and shutdown.
+
+---
+
+## Exercise 5 — Paging
+
+Build:
+
+```text
+Fake Database
+      ↓
+Page API
+      ↓
+ViewModel
+      ↓
+Next / Previous Buttons
+```
+
+Demo:
+
+- Load page 1.
+- Move to page 2.
+- Return to page 1.
+- Optionally cache recent pages.
+
+---
+
+## Exercise 6 — UI Virtualization
+
+Create a WPF application containing a large collection.
+
+Demo:
+
+```text
+Large Collection
+      ↓
+Virtualized List
+      ↓
+Scroll
+      ↓
+Observe UI responsiveness
+```
+
+Then compare with a deliberately non-virtualized implementation.
+
+---
+
+## Exercise 7 — End-to-End Monitoring Application
+
+Combine:
+
+```text
+Data Producer
+    ↓
+Bounded Channel
+    ↓
+Background Processor
+    ↓
+Batch / Sample
+    ↓
+ViewModel
+    ↓
+Virtualized UI
+```
+
+Add:
+
+- Cancellation.
+- Error handling.
+- Metrics/logging.
+- Configuration caching.
+- Historical paging.
+
+This is an excellent final practice project because it combines many Staff Engineer interview topics into one working demonstration.
+
+---
+
+# Final Demonstration Strategy
+
+For implementation-oriented interviews, do not try to build a complete enterprise application.
+
+Build a small version that demonstrates the architectural idea.
+
+For example:
+
+```text
+Fake Hardware
+    ↓
+Producer
+    ↓
+Channel<T>
+    ↓
+Consumer
+    ↓
+ViewModel
+    ↓
+ListBox
+```
+
+Then explain:
+
+> "This is the simplified implementation. In production, I would add persistence, retry policies, observability, bounded retention, error handling, and domain-specific overflow rules."
+
+The interviewer can then see both:
+
+```text
+Can explain the design
+        +
+Can implement the core mechanism
+```
+
+That combination is often much stronger than theory alone.
