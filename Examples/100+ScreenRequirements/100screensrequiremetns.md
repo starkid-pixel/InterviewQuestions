@@ -1,6 +1,9 @@
 <img width="746" height="827" alt="image" src="https://github.com/user-attachments/assets/8b213e47-7387-4330-90cd-25506c6bda63" />
 
 
+# how do decide multiwindow, or shell and page based navigation
+
+<img width="699" height="783" alt="image" src="https://github.com/user-attachments/assets/7c32a6cf-6538-4997-87e3-c1f6930f5403" />
 
 
 
