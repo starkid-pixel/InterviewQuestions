@@ -1,3 +1,9 @@
+<img width="746" height="827" alt="image" src="https://github.com/user-attachments/assets/8b213e47-7387-4330-90cd-25506c6bda63" />
+
+
+
+
+
 # WPF Large Application Architecture
 
 ## 1. Problem Statement
