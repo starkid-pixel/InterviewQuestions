@@ -1,0 +1,1391 @@
+What is view, viewmodel and model and what are the architectural responsibitlies
+
+# Architectural Responsibilities in MVVM
+
+These three questions should be answered in terms of responsibility, not simply "XAML goes here, C# goes there." For your architecture discussion, this distinction is critical.
+
+---
+
+## 18. What belongs in the View?
+
+The View is responsible for **presentation** and **user interaction** at the UI level.
+
+### Typical Responsibilities
+* **XAML / layout**
+* **Controls**
+* **Styles**
+* **Templates**
+* **Animations**
+* **Visual states**
+* **Data binding**
+* **UI-specific validation/behavior**
+* **UI events that are inherently visual**
+
+#### Code Example
+```xml
+<Button
+    Content="Save"
+    Command="{Binding SaveCommand}" />
+```
+
+### Core Question
+The View explicitly answers: **"How should this information and interaction be presented?"**
+
+### What It Should Generally NOT Contain
+* Business rules
+* Database operations
+* Hardware communication
+* Application workflows
+* Complex business calculations
+
+### Important Nuance
+MVVM does not mean "zero code-behind." It is perfectly reasonable to have code-behind for something that is genuinely View-specific.
+
+#### View-Specific Code Examples
+```csharp
+private void OnLoaded(...)
+{
+    FocusSearchBox();
+}
+```
+*or:*
+```csharp
+private void OnPreviewMouseDown(...)
+{
+    // UI-specific behavior
+}
+```
+
+The problem is not code-behind itself. The problem is putting business or application responsibility into the View.
+
+> 💡 **Architect Interview Tip:**
+> "The View owns presentation concerns and UI-specific behavior. It should not own business logic or infrastructure concerns."
+
+---
+
+## 19. What belongs in the ViewModel?
+
+The ViewModel is the **presentation-facing representation** of application state and interaction.
+
+### Typical Responsibilities
+* **Presentation state**
+* **Properties exposed to the View**
+* **Commands**
+* **UI-oriented validation state**
+* **Observable collections**
+* **Interaction with application services**
+* **Navigation coordination**
+* **Property-change notifications**
+
+#### Code Example
+```csharp
+public class CustomerViewModel : INotifyPropertyChanged
+{
+    private readonly ICustomerService _customerService;
+
+    public ObservableCollection<Customer> Customers { get; }
+    public ICommand SaveCommand { get; }
+    public bool IsBusy { get; private set; }
+
+    public CustomerViewModel(ICustomerService customerService)
+    {
+        _customerService = customerService;
+    }
+}
+```
+
+### Core Question
+The ViewModel answers: **"What state and actions does the View need?"**
+
+### Coordination Flow
+It acts as a coordinator for user actions:
+```
+User clicks Save ➔ SaveCommand ➔ Application service ➔ Business operation
+```
+
+### Architectural Boundaries
+Avoid turning the ViewModel into a **god object**. 
+
+❌ **Bad Architecture (Tight Coupling):**
+```
+CustomerViewModel ➔ SQL queries ➔ Hardware SDK ➔ File system ➔ Business algorithms ➔ Network communication
+```
+
+└── **Good Architecture (Separation of Concerns):**
+```
+CustomerViewModel ➔ Application Service ➔ Business/Application logic ➔ Infrastructure abstractions
+```
+The ViewModel **coordinates** application capabilities; it does not implement them directly.
+
+---
+
+## 20. What belongs in the Model?
+
+The "Model" is not merely a DTO (Data Transfer Object) or a raw database entity. Depending on your architecture, it represents the core **application/domain data and behavior**.
+
+### Domain Concepts
+* `Customer`
+* `Order`
+* `Device`
+* `Measurement`
+* `Invoice`
+
+A rich domain model can and should contain business rules.
+
+#### Code Example
+```csharp
+public class Order
+{
+    public decimal Total { get; private set; }
+
+    public void ApplyDiscount(decimal percentage)
+    {
+        // Business rule implementation
+    }
+}
+```
+
+### Core Rule
+The Model must represent concepts meaningful to the business or domain rather than WPF presentation concepts. It should generally **not know about UI elements** like: `Button`, `TextBox`, `Window`, `DataContext`, `Dispatcher`, or any WPF controls.
+
+---
+
+## A Useful Distinction
+
+Think of the data flow and responsibilities across the three components like this:
+
+```
+             USER
+              ↓
+        ┌───────────┐
+        │   View    │ ➔ "How do I present it?"
+        └─────┬─────┘
+              │ Binding / Commands
+              ↓
+        ┌───────────┐
+        │ ViewModel │ ➔ "What state and actions does the UI need?"
+        └─────┬─────┘
+              │ Application APIs
+              ↓
+        ┌───────────┐
+        │  Model /  │ ➔ "What does the business/application concept
+        │App Layer  │    represent and what rules does it have?"
+        └───────────┘
+```
+
+### Important Corrections for Architect-Level Interviews
+
+* ❌ **Don't say:** "The ViewModel contains all the business logic." (Common but weak MVVM answer).
+* └── **Instead say:** "The ViewModel contains presentation state and coordinates user interactions with the application layer. Business rules should remain inside the appropriate application/domain components."
+
+
+* ❌ **Don't say:** "The Model is just the database model."
+* └── **Instead say:** "The Model represents the application's domain concepts. Database entities or DTOs may be part of the overall data model, but I wouldn't automatically equate the persistence model with the domain model."
+
+---
+
+## Your 17 ➔ 20 Architecture Flow
+
+This connects directly with the macro architecture pipeline established earlier:
+
+```
+Requirements ➔ Architecture Drivers ➔ Architecture Analysis ➔ Architecture Selection ➔ HLD ➔ Major Components ➔ System Design ➔ Communication / Data Flow ➔ LLD
+```
+
+Then, within the **Presentation** component, you make the explicit MVVM architectural decision:
+
+```
+Presentation
+│
+├── View
+│    └── Presentation
+│
+├── ViewModel
+│    └── Presentation state + interaction
+│
+└── Model/Application contracts
+     └── Domain/application concepts
+```
+
+> 🎯 **Key Takeaway:** MVVM is a localized design pattern chosen within the Presentation architecture, not the overarching architecture for the entire enterprise system. Making this distinction explicit will significantly strengthen your credibility in an architect interview.
+
+
+# Architect-Level MVVM Design Guidelines
+
+This document presents MVVM design guidelines formulated as explicit architectural rules rather than a basic list of UI features. These guidelines prioritize maintaining clean structural boundaries, decoupling, testability, and deterministic resource lifecycle management.
+
+---
+
+## 1. Keep the View Responsible for Presentation
+The View owns everything related to the visual layer. It must remain free of corporate business logic.
+
+* **Typical Responsibilities:** XAML layouts, styles, templates, visual states, animations, UI-specific behavior, and structural data bindings.
+* **Architecture Flow:**
+  ```
+  View ➔ Presentation Only
+  ```
+* **Code-Behind Nuance:** Code-behind is acceptable and fully encouraged when the behavior is strictly UI-specific (e.g., setting manual focus, low-level mouse interactions, or handling complex visual transitions).
+
+---
+
+## 2. Keep the ViewModel Independent of the View
+The ViewModel must never hold a direct reference to a UI class or interface (e.g., `CustomerView` or `Window`). This ensures clean test boundaries and prevents critical memory leaks.
+
+* **Architecture Flow:**
+  ```
+  View ➔ DataContext ➔ ViewModel (No reverse reference)
+  ```
+* **Benefit:** Eliminates hard coupling and protects the codebase against visual lifetime bugs.
+
+---
+
+## 3. ViewModel Represents Presentation State
+The ViewModel exposes only the pure state and interaction objects required by the View. It must never expose raw controls (e.g., `TextBox`, `DataGrid`, or `Window`).
+
+* **Typical Elements:** Properties (`CustomerName`, `IsBusy`), collections (`ObservableCollection<Customer>`), and UI actions (`ICommand`).
+* **Architecture Flow:**
+  ```
+  View ➔ Data Binding / Commands ➔ ViewModel
+  ```
+
+---
+
+## 4. Keep Business Logic Out of the ViewModel
+The ViewModel acts as a coordinator, not the executor of domain rules.
+
+* ❌ **Anti-Pattern:**
+  ```
+  View ➔ ViewModel ➔ [500 lines of complex business rules]
+  ```
+* └── **Target Pattern:**
+  ```
+  View ➔ ViewModel ➔ Application Service ➔ Business/Domain Layer
+  ```
+* **Rule:** Presentation states go to the ViewModel; actual business constraints, calculations, and domain workflows belong in the core business/domain layer.
+
+---
+
+## 5. ViewModels Depend on Abstractions
+Always follow the Dependency Inversion Principle. Inject services via constructors rather than hardcoding concrete instantiations.
+
+* ❌ **Anti-Pattern:**
+  ```csharp
+  public CustomerViewModel() { _service = new CustomerService(); }
+  ```
+* └── **Target Pattern:**
+  ```csharp
+  public CustomerViewModel(ICustomerService customerService) { _customerService = customerService; }
+  ```
+* **Benefits:** Loose coupling, mocking capabilities during unit tests, replaceability, and seamless extensibility.
+
+---
+
+## 6. Use Dependency Injection for Object Creation
+The ViewModel must never manually manage the construction pipeline of its external dependencies.
+
+* **Architecture Flow:**
+  ```
+  Composition Root ➔ DI Container ➔ ViewModel ➔ Interfaces ➔ Concrete Implementations
+  ```
+* **Practical Advantage:** Makes swapping live system services (like a real production hardware interface) with mock components or local simulators trivial.
+
+---
+
+## 7. Commands Represent User Actions
+Do not put complex application flows directly inside visual click event handlers in the code-behind.
+
+* ❌ **Anti-Pattern:**
+  ```
+  Button_Click() ➔ Business Logic
+  ```
+* └── **Target Pattern:**
+  ```
+  Button ➔ Command ➔ ViewModel ➔ Application Service
+  ```
+* **Rule:** The `ICommand` maps the user's physical intent, while the downstream application service implements the structural operation.
+
+---
+
+## 8. Use INotifyPropertyChanged for ViewModel State
+When properties change within the ViewModel, use structured data binding updates over manual UI interventions.
+
+* **Architecture Flow:**
+  ```
+  App Operation ➔ VM State Changes ➔ PropertyChanged ➔ WPF Binding Engine ➔ View Updates
+  ```
+* **Snippet:**
+  ```csharp
+  PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsBusy)));
+  ```
+
+---
+
+## 9. Use ObservableCollection for Dynamic Collections
+Ensure a clear technical distinction between individual property modifications and collection collection alterations.
+
+* **INotifyPropertyChanged:** Used to track when specific properties *change value*.
+* **ObservableCollection:** Used exclusively when items are dynamically *added, removed, or cleared* from a displayed list.
+
+---
+
+## 10. Keep Navigation Out of Individual Views
+Centralize navigation handling instead of letting individual views interact directly with the shell or frame host.
+
+* **Architecture Flow:**
+  ```
+  ViewModel ➔ Navigation Abstraction ➔ Navigation Service / Shell ➔ Target View + ViewModel
+  ```
+* **Advantage:** Supports structural patterns like View-First or ViewModel-First cleanly across the wider system.
+
+---
+
+## 11. Define a Clear ViewModel Lifecycle
+View models must conform to a deterministic runtime lifecycle to ensure proper resource management.
+
+* **Lifecycle Pipeline:**
+  ```
+  OnNavigatedTo() ➔ Active ➔ OnNavigatedFrom() ➔ Inactive
+  ```
+* **OnNavigatedFrom Tasks:** Unsubscribe from global services, cancel active async operations, stop background polling, and pause active UI timers.
+* **Important Note:** `OnNavigatedFrom()` does not mean the ViewModel is destroyed; it may still reside inactive inside the back-stack history.
+
+---
+
+## 12. Prevent Navigation History Memory Leakage
+Avoid accidentally retaining heavy object graphs inside navigation histories.
+
+* ❌ **Accidental Retention:** Storing `NavigationEntry(viewModelInstance)` keeps the entire hierarchy alive in memory.
+* └── **Target Retention:** Store `NavigationEntry(viewModelType, parameter)`. This allows historical VMs to be garbage collected when not visible. State can be kept separate if restoration is required.
+
+---
+
+## 13. Manage Event Subscriptions Explicitly
+Long-lived global application publishers holding references to transient ViewModels will cause memory leaks.
+
+* **Leaking Vector:**
+  ```
+  Long-lived Service ➔ Event Subscriptions ➔ Inactive ViewModel (Prevents GC)
+  ```
+* **Deterministic Fix:**
+  ```csharp
+  protected void OnNavigatedTo() { _service.DataChanged += OnDataChanged; }
+  protected void OnNavigatedFrom() { _service.DataChanged -= OnDataChanged; }
+  ```
+
+---
+
+## 14. Keep ViewModels Testable Without WPF UI
+One of the most practical and direct benefits of MVVM is the ability to write rapid, lightweight unit tests.
+
+* **Target Setup:**
+  ```csharp
+  var vm = new CustomerViewModel(mockCustomerService);
+  ```
+* **Scope of Valid Tests:** Command execution, property data-binding, UI input validation, application service interactions, navigation commands, and error handling.
+* **Rule:** Tests must execute successfully without initializing a `Window`, `UserControl`, `Dispatcher`, or mounting a `Visual Tree`.
+
+---
+
+## 15. Don't Create a ViewModel God Object
+Do not allow individual view models to swell under too many disparate features. Split responsibilities logically.
+
+* ❌ **Anti-Pattern:** A single `CustomerViewModel` managing details, orders, physical hardware, analytics reporting, configurations, and core validation spanning thousands of lines.
+* └── **Target Composition:**
+  ```
+  CustomerViewModel
+   ├── CustomerDetailsViewModel
+   ├── CustomerOrdersViewModel
+   └── CustomerHistoryViewModel
+  ```
+* **Goal:** A single ViewModel should map directly to one coherent, bounded presentation responsibility.
+
+---
+
+## The Interview Answer (Architect Summary)
+
+When asked directly about your MVVM guidelines during an elite technical interview, summarize the underlying philosophy rather than naming all 15 components:
+
+> "My MVVM design guidelines are fundamentally focused on maintaining clear architectural boundaries. I keep the View limited to presentation logic and visual behavior, while the ViewModel acts strictly as a coordinator that maps presentation states, updates properties, and routes commands to downstream subsystems. Crucially, business logic remains outside the ViewModel, isolated cleanly inside application or domain services. 
+>
+> By relying entirely on abstractions injected via Dependency Injection, our presentation layer remains loosely coupled, highly testable, and adaptable—allowing us to switch seamlessly between real system hardware and software simulators. Finally, I enforce deterministic view-model lifecycles, explicit event unsubscriptions to prevent memory leaks, and prevent ViewModels from swelling into god-objects by decomposing them around isolated presentation responsibilities."
+
+***
+# MVVM Anti-Patterns and SOLID Principles
+
+This architectural guide connects structural MVVM presentation boundaries with overarching SOLID design patterns to ensure maximum testability, loose coupling, and maintainable application lifecycles.
+
+---
+
+## Part 1 — MVVM Anti-Patterns
+
+These are the architectural antipatterns critical to identify and defend against during senior or architect-level engineering interviews.
+
+### 1. God ViewModel
+The most common problem where a presentation object becomes a dumping ground for unrelated system responsibilities.
+
+```
+CustomerViewModel
+│
+├── UI state
+├── Navigation
+├── Validation
+├── Business rules
+├── Database calls
+├── Hardware calls
+├── File operations
+├── Reporting
+└── 3000 lines of code
+```
+*This technically compiles under MVVM, but it violates clean architecture principles.*
+
+#### └── Better Approach
+```
+CustomerViewModel
+       │
+       ├── ICustomerService
+       ├── INavigationService
+       └── IValidationService
+```
+The dependencies map into distinct vertical layers:
+```
+CustomerService ➔ Application / Domain ➔ Infrastructure
+```
+
+> 💡 **Architect Interview Statement:**
+> *"I do not consider an MVVM implementation successful merely because the codebase has View, ViewModel, and Model classes. I evaluate whether the ViewModel maintains a highly coherent, presentation-only responsibility."*
+
+### 2. Business Logic in the View
+Coupling domain rules and infrastructural actions tightly to UI-specific interactions.
+
+❌ **Bad Implementation:**
+```csharp
+private void SaveButton_Click(...)
+{
+    if (customer.Age < 18)
+        throw new Exception("Invalid");
+
+    database.Save(customer);
+}
+```
+*The View leaks information regarding business validation rules, direct persistence engines, and external infrastructure.*
+
+#### └── Better Approach
+```
+Button ➔ Command ➔ ViewModel ➔ Application Service ➔ Business Logic
+```
+
+### 3. Business Logic in the ViewModel
+Moving the exact same structural errors inside a command handler doesn't automatically make the architecture sound.
+
+❌ **Bad Implementation:**
+```csharp
+private void SaveButton_Click(...) // Moved into: SaveCommand.Execute()
+
+if (customer.Type == ...)
+{
+    // 200 lines of complex business rules
+}
+```
+*This simply shifts technical debt out of the code-behind file into an unmanageable ViewModel.*
+
+#### └── Better Approach
+```
+ViewModel ➔ CustomerService ➔ Business Rules
+```
+The ViewModel purely acts as a **coordinator** of operations; the domain model or application layer owns the actual business rule invariants.
+
+### 4. ViewModel Directly Accessing Hardware
+Tying presentation engines directly to concrete physical vendor implementations.
+
+❌ **Bad Implementation:**
+```csharp
+public class DeviceViewModel
+{
+    private PhysicalDevice _device;
+
+    public void Start()
+    {
+        _device.Connect();
+        _device.ReadRegister(42);
+    }
+}
+```
+*The presentation tier implicitly inherits knowledge about registers, physical connection loops, and underlying SDK constraints.*
+
+#### └── Better Approach
+```csharp
+public DeviceViewModel(IDeviceService deviceService)
+{
+    _deviceService = deviceService;
+}
+```
+The architecture flows from abstract to concrete definitions:
+```
+ViewModel ➔ IDeviceService ➔ Infrastructure ➔ Hardware
+```
+This enables seamless hot-swapping between concrete implementations:
+* `PhysicalDevice`
+* `SimulatorDevice`
+* `TestDevice`
+
+### 5. ViewModel Holding a View Reference
+Establishing an explicit back-reference loop from logic to presentation components.
+
+❌ **Bad Implementation:**
+```csharp
+public CustomerView View { get; }
+// or: Window _window;
+```
+```
+ViewModel ➔ View
+```
+*This design breaks presentation boundaries, restricts execution context, complicates view lifecycle transitions, and blocks unit testing pipelines.*
+
+#### └── Better Approach
+Maintain a clean, unidirectional reference hierarchy via the view hierarchy:
+```
+View ➔ DataContext ➔ ViewModel
+```
+
+### 6. Creating Dependencies with `new`
+An object controlling the creation and lifecycle of its own external dependencies.
+
+❌ **Bad Implementation:**
+```csharp
+public CustomerViewModel()
+{
+    _service = new CustomerService();
+    _repository = new CustomerRepository();
+}
+```
+*Creates absolute hard-coding. This patterns blocks isolated testing, prevents simple mock injection, and links class lifecycles closely together.*
+
+#### └── Better Approach
+```csharp
+public CustomerViewModel(ICustomerService service)
+{
+    _service = service;
+}
+```
+Offload structural construction duties entirely to the application's global Dependency Injection system.
+
+### 7. Everything Through an EventAggregator
+Overusing messaging buses to the point where structural flow turns into unpredictable indirection.
+
+❌ **Bad Implementation:**
+```
+CustomerViewModel ➔ EventAggregator ➔ [Broadcasted Message] ➔ OrderViewModel
+```
+*Spaghetti relationships grow rapidly when clean interface boundaries are bypassed for ambient messaging pipelines.*
+
+#### └── Better Approach
+* Use global messaging loops exclusively when the underlying relationship is structurally **event-driven** (e.g., `CustomerChangedEvent`).
+* Use clean direct abstractions when a synchronous **service request** loop is needed (e.g., `ICustomerService.GetCustomer()`).
+
+> 🎯 **Architectural Principle:** Use the least indirect mechanism that safely provides the necessary decoupling.
+
+### 8. Memory Leaks Through Event Subscriptions
+Long-lived shared structural engines holding onto volatile transient visual targets.
+
+```
+Long-lived Service ➔ Event Handler ➔ CustomerViewModel
+```
+*If a root service handles an event subscription from a page-scoped ViewModel without explicit teardown steps, the page object remains locked in memory.*
+
+#### └── Better Approach
+Tie structural setup and tearing down steps directly to your framework's view tracking lifecycle:
+```csharp
+// Executed on View Activation
+OnNavigatedTo() { _service.DataChanged += OnDataChanged; }
+
+// Executed on View Deactivation
+OnNavigatedFrom() { _service.DataChanged -= OnDataChanged; }
+```
+Apply this policy across all shared assets: Timers, Background Workers, Shared Brokers, and Async callbacks.
+
+### 9. Navigation Logic Scattered Everywhere
+Distributed navigation orchestration patterns where local views manipulate parent UI containers on the fly.
+
+❌ **Bad Implementation:**
+```
+CustomerViewModel ➔ Instantiates OrderView
+OrderViewModel    ➔ Instantiates CustomerView
+Random UI Component ➔ Mutates Main Window / Shell Container Directly
+```
+
+#### └── Better Approach
+```
+ViewModel ➔ INavigationService ➔ Shell / Navigation Manager ➔ View + ViewModel Creation
+```
+This forces all route management execution through a single path, running clean hooks automatically:
+```
+NavigateFrom ➔ Event Teardown/Cleanup ➔ NavigateTo ➔ Load/Activate State
+```
+
+### 10. Treating ViewModel as a Data Model
+Exposing presentation layer wrappers as enterprise-wide persistent contracts.
+
+❌ **Bad Implementation:**
+```csharp
+public class CustomerViewModel
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+}
+```
+Passing this presentation class around across deep subsystems:
+```
+Database ➔ CustomerViewModel ➔ Application Logic ➔ Third-Party Domain Modules
+```
+
+#### └── Better Approach
+```
+Database Entity ➔ Application / Domain Model ➔ UI-Tailored ViewModel
+```
+The ViewModel converts internal business properties specifically to meet the presentation constraints of the visual layouts.
+
+---
+
+## Part 2 — MVVM + SOLID Mapping
+
+Connecting structural presentation duties natively with enterprise SOLID principles ensures components remain decoupled and resilient to changes.
+
+### S — Single Responsibility Principle (SRP)
+* **View:** Manages presentation layout and rendering mechanics.
+* **ViewModel:** Handles UI execution state and user interaction coordination.
+* **Service:** Drives explicit business orchestration use cases.
+* **Repository:** Controls concrete data persistence structures.
+
+```
+CustomerView ➔ CustomerViewModel ➔ CustomerService ➔ CustomerRepository
+```
+> 💡 **Architect Interview Statement:**
+> *"I use SRP to ensure the ViewModel does not become a generic dumping ground for UI rendering, business rules, database queries, and hardware communication."*
+
+### O — Open/Closed Principle (OCP)
+The presentation layer is fully open for extension but closed for modification when new options are added.
+
+#### └── Example
+```csharp
+public interface IDevice
+{
+    Task<DeviceData> ReadAsync();
+}
+```
+Concrete variations sit cleanly behind the contract:
+```
+IDevice ➔ PhysicalDevice | SimulatorDevice | NewHardwareDevice
+```
+Adding `NewHardwareDevice` requires **zero modifications** to `DeviceViewModel` or the internal `ApplicationService`.
+
+### L — Liskov Substitution Principle (LSP)
+All substitute entities conforming to an abstract interface must fully respect the behavior expected by the consumer.
+
+❌ **LSP Violation Example:**
+```csharp
+PhysicalDevice.ReadAsync()  ➔ Returns DeviceData
+SimulatorDevice.ReadAsync() ➔ Throws NotSupportedException();
+```
+*If an active reading pipeline relies on this contract, throwing a validation exception breaks the core application layer.*
+
+> 💡 **Architect Interview Statement:**
+> *"I apply LSP to guarantee that testing and simulation assets behave as transparent substitutes, rather than just classes that happen to implement the same interface."*
+
+### I — Interface Segregation Principle (ISP)
+Clients should never be forced to depend upon interface methods they do not use.
+
+❌ **Bad (Fat Interface):**
+```csharp
+public interface IDevice { void Connect(); void Disconnect(); double ReadTemperature(); void Print(); void SaveToDatabase(); }
+```
+
+#### └── Better Approach (Lean, Focused Contracts)
+```csharp
+public interface ITemperatureReader { Task<double> ReadTemperatureAsync(); }
+public interface IDeviceConnection  { Task ConnectAsync(); Task DisconnectAsync(); }
+```
+Consumers only import the specific interface traits they need, minimizing compile-time and runtime coupling.
+
+### D — Dependency Inversion Principle (DIP)
+High-level application logic must never depend directly upon concrete low-level infrastructural modules; both must depend on clean abstractions.
+
+❌ **Bad Design (High Coupling):**
+```
+ViewModel ➔ PhysicalDevice (Infrastructure)
+```
+
+#### └── Better Design (Inverted Boundary)
+```
+ViewModel ➔ IDevice (Abstraction Contract) 
+                 ▲
+          PhysicalDevice (Infrastructure)
+```
+
+The core software modules define what they require through boundaries. The external infrastructure layer points inward to fulfil those contractual constraints.
+
+---
+
+## The Complete MVVM + SOLID Picture
+
+When structured together properly, MVVM provides localized presentation separation, while SOLID ensures a scalable, testable, and maintainable application from top to bottom.
+
+# MVVM Communication Between ViewModels
+
+## 1. Overview
+
+One ViewModel **can communicate with another ViewModel**, but in a well-designed MVVM application, direct ViewModel-to-ViewModel dependencies should generally be avoided unless there is a genuine parent-child presentation relationship.
+
+The communication mechanism should be selected based on **why the communication is required**.
+
+The main cases are:
+
+1. **Event / Message communication**
+2. **Parent-Child ViewModel communication**
+3. **ViewModel-to-ViewModel navigation**
+
+A fourth important case is **sharing application data/services**, where both ViewModels depend on an application service rather than on each other.
+
+---
+
+# 2. Event / Message Communication
+
+Use event/message communication when:
+
+> **One component wants to announce that something happened, without knowing which components will react.**
+
+### Example
+
+Suppose `CustomerViewModel` selects a customer.
+
+```csharp
+public record CustomerSelected(int CustomerId);
+```
+
+The CustomerViewModel publishes the event:
+
+```csharp
+public class CustomerViewModel
+{
+    private readonly IMessageBus _messageBus;
+
+    public void SelectCustomer(int customerId)
+    {
+        _messageBus.Publish(
+            new CustomerSelected(customerId));
+    }
+}
+```
+
+The OrderViewModel subscribes:
+
+```csharp
+public class OrderViewModel
+{
+    private readonly IMessageBus _messageBus;
+
+    public OrderViewModel(IMessageBus messageBus)
+    {
+        _messageBus = messageBus;
+
+        _messageBus.Subscribe<CustomerSelected>(
+            OnCustomerSelected);
+    }
+
+    private void OnCustomerSelected(
+        CustomerSelected message)
+    {
+        // Load orders for the selected customer
+    }
+}
+```
+
+The communication becomes:
+
+```text
+CustomerViewModel
+       |
+       | Publish
+       ↓
+   Message Bus
+       |
+       ↓
+OrderViewModel
+```
+
+The important point is that:
+
+```text
+CustomerViewModel -X-> OrderViewModel
+```
+
+There is no direct dependency between the two ViewModels.
+
+---
+
+## 2.1 When Event/Message Communication Is Appropriate
+
+Use it when:
+
+- One component announces an event.
+- Multiple components may react.
+- The publisher should not know the subscribers.
+- Modules should remain loosely coupled.
+- The communication represents something that **happened**.
+
+Examples:
+
+```text
+CustomerSelected
+CustomerChanged
+DeviceConnected
+MeasurementCompleted
+ConfigurationChanged
+ApplicationStateChanged
+```
+
+---
+
+# 3. Event Subscription and Memory Leaks
+
+Event/message communication introduces an important lifecycle concern.
+
+Suppose the message bus is long-lived:
+
+```text
+Application
+    ↓
+Singleton MessageBus
+    ↓
+OrderViewModel
+```
+
+If `OrderViewModel` subscribes and never unsubscribes, the message bus may keep the ViewModel alive.
+
+Therefore, subscriptions should be treated as part of the ViewModel lifecycle.
+
+```text
+OnNavigatedTo()
+      ↓
+Subscribe
+
+OnNavigatedFrom()
+      ↓
+Unsubscribe
+```
+
+For example:
+
+```csharp
+private IDisposable? _subscription;
+
+protected override void OnNavigatedTo()
+{
+    _subscription =
+        _messageBus.Subscribe<CustomerSelected>(
+            OnCustomerSelected);
+}
+
+protected override void OnNavigatedFrom()
+{
+    _subscription?.Dispose();
+    _subscription = null;
+}
+```
+
+This fits a navigation lifecycle such as:
+
+```text
+NavigateTo
+    ↓
+Activate
+    ↓
+Subscribe
+    ↓
+Active
+    ↓
+NavigateFrom
+    ↓
+Unsubscribe
+    ↓
+Inactive
+```
+
+### Important distinction
+
+`OnNavigatedFrom()` does **not necessarily mean the ViewModel is destroyed**.
+
+The ViewModel may still be retained by navigation history.
+
+It simply means that it is no longer the active participant in the current screen.
+
+---
+
+# 4. Parent-Child ViewModels
+
+This is different from event communication.
+
+Here there is an explicit **ownership or composition relationship**.
+
+For example:
+
+```text
+CustomerView
+     |
+     ↓
+CustomerViewModel
+     |
+     +── CustomerDetailsViewModel
+     |
+     +── CustomerOrdersViewModel
+     |
+     +── CustomerHistoryViewModel
+```
+
+The parent ViewModel can own or coordinate child ViewModels.
+
+Example:
+
+```csharp
+public class CustomerViewModel
+{
+    public CustomerDetailsViewModel Details { get; }
+
+    public CustomerOrdersViewModel Orders { get; }
+
+    public CustomerHistoryViewModel History { get; }
+
+    public CustomerViewModel(
+        CustomerDetailsViewModel details,
+        CustomerOrdersViewModel orders,
+        CustomerHistoryViewModel history)
+    {
+        Details = details;
+        Orders = orders;
+        History = history;
+    }
+}
+```
+
+The View might be composed as:
+
+```text
+CustomerView
+│
+├── CustomerDetailsView
+├── CustomerOrdersView
+└── CustomerHistoryView
+```
+
+With:
+
+```text
+CustomerView
+      ↓
+CustomerViewModel
+      │
+      ├── DetailsViewModel
+      ├── OrdersViewModel
+      └── HistoryViewModel
+```
+
+---
+
+## 4.1 Why Direct Communication Is Acceptable Here
+
+The relationship is explicit:
+
+> **CustomerViewModel owns or coordinates CustomerOrdersViewModel.**
+
+For example:
+
+```csharp
+public void SelectCustomer(int customerId)
+{
+    Orders.LoadCustomer(customerId);
+    History.LoadCustomer(customerId);
+}
+```
+
+This can be appropriate because the parent is coordinating the presentation of a single composite screen.
+
+---
+
+## 4.2 Avoid ViewModel Dependency Chains
+
+Avoid structures such as:
+
+```text
+CustomerVM
+   ↓
+OrdersVM
+   ↓
+PaymentVM
+   ↓
+DeviceVM
+   ↓
+CustomerVM
+```
+
+This can create:
+
+- High coupling
+- Circular dependencies
+- Difficult testing
+- Complex lifecycle management
+- Difficult navigation
+- Potential object-retention problems
+
+A parent-child relationship should be intentional and bounded.
+
+---
+
+# 5. ViewModel-to-ViewModel Navigation
+
+This is a third, distinct scenario.
+
+Suppose:
+
+```text
+CustomerViewModel
+```
+
+has a command:
+
+```text
+View Orders
+```
+
+and the destination is:
+
+```text
+OrderViewModel
+```
+
+A poor implementation would be:
+
+```csharp
+public void ViewOrders()
+{
+    var orderVm = new OrderViewModel();
+}
+```
+
+This makes `CustomerViewModel` responsible for:
+
+- Creating the destination ViewModel
+- Knowing its concrete type
+- Managing its lifetime
+- Passing parameters
+- Potentially creating its View
+
+That is too much responsibility.
+
+---
+
+# 6. Use a Navigation Service
+
+Instead, define a navigation abstraction:
+
+```csharp
+public interface INavigationService
+{
+    void Navigate<TViewModel>(object? parameter = null);
+}
+```
+
+Then:
+
+```csharp
+public class CustomerViewModel
+{
+    private readonly INavigationService _navigation;
+
+    public void ViewOrders()
+    {
+        _navigation.Navigate<OrderViewModel>(
+            CustomerId);
+    }
+}
+```
+
+The communication becomes:
+
+```text
+CustomerViewModel
+       ↓
+INavigationService
+       ↓
+NavigationManager
+       ↓
+DI Container
+       ↓
+OrderViewModel
+```
+
+The CustomerViewModel does not construct the OrderViewModel.
+
+---
+
+# 7. How This Fits ViewModel-First Navigation
+
+This aligns with a ViewModel-first navigation architecture.
+
+Suppose the current ViewModel is:
+
+```text
+CustomerViewModel
+```
+
+The user selects:
+
+```text
+View Orders
+```
+
+The flow is:
+
+```text
+CustomerViewModel
+       |
+       | Navigate<OrderViewModel>(CustomerId)
+       ↓
+NavigationService
+       ↓
+1. Get current ViewModel
+       ↓
+2. OnNavigatedFrom()
+       ↓
+3. Unsubscribe / cancel active operations
+       ↓
+4. Store navigation history if required
+       ↓
+5. Resolve OrderViewModel through DI
+       ↓
+6. Resolve OrderView through ViewRegistry
+       ↓
+7. Set DataContext
+       ↓
+8. OrderViewModel.OnNavigatedTo(CustomerId)
+       ↓
+9. Make OrderViewModel current
+```
+
+This keeps navigation centralized in the Shell/Navigation infrastructure.
+
+---
+
+# 8. Sharing Data Between ViewModels
+
+This is another important scenario.
+
+Suppose:
+
+```text
+CustomerViewModel
+```
+
+and:
+
+```text
+OrderViewModel
+```
+
+both need customer information.
+
+Do not automatically make:
+
+```text
+CustomerViewModel
+       ↓
+OrderViewModel
+```
+
+Instead, introduce an application service:
+
+```text
+             CustomerService
+              /          \
+             ↓            ↓
+      CustomerVM      OrderVM
+```
+
+For example:
+
+```csharp
+public interface ICustomerService
+{
+    Task<Customer> GetCustomerAsync(int id);
+}
+```
+
+Both ViewModels can depend on the service:
+
+```csharp
+public CustomerViewModel(
+    ICustomerService customerService)
+{
+    _customerService = customerService;
+}
+```
+
+and:
+
+```csharp
+public OrderViewModel(
+    ICustomerService customerService)
+{
+    _customerService = customerService;
+}
+```
+
+This is **shared application capability**, not ViewModel-to-ViewModel coupling.
+
+---
+
+# 9. Decision Tree
+
+When one ViewModel needs something from another, ask:
+
+```text
+Does VM-A need VM-B?
+          |
+          ↓
+        Why?
+          |
+    +-----+-------------------+
+    |                         |
+ Navigate?               Business/data?
+    |                         |
+    ↓                         ↓
+NavigationService       ApplicationService
+```
+
+If the requirement is:
+
+```text
+"Something happened."
+```
+
+use:
+
+```text
+Event / Message
+```
+
+If the requirement is:
+
+```text
+"Parent coordinates child."
+```
+
+use:
+
+```text
+Parent → Child
+```
+
+If the requirement is:
+
+```text
+"I need to move to another screen."
+```
+
+use:
+
+```text
+NavigationService
+```
+
+If the requirement is:
+
+```text
+"I need business data or an operation."
+```
+
+use:
+
+```text
+Application Service
+```
+
+---
+
+# 10. Comparison
+
+| Scenario | Preferred mechanism |
+|---|---|
+| Customer VM needs customer data | Application Service |
+| Customer changed → notify other modules | Event / Message |
+| Parent coordinates child VM | Direct Parent → Child |
+| VM wants another screen | Navigation Service |
+| VM needs hardware | Hardware abstraction/service |
+| Two independent VMs need shared business capability | Application Service |
+| Two VMs directly manipulate each other | Avoid |
+
+---
+
+# 11. Architectural Principle
+
+A ViewModel should **not become the communication infrastructure of the application**.
+
+Instead:
+
+```text
+                  Communication
+                        |
+        +---------------+---------------+
+        |               |               |
+   Navigation        Event          Parent/Child
+        |               |               |
+ NavigationService   MessageBus      Direct reference
+        |
+        |
+   Application Service
+        |
+   Shared business
+   capability
+```
+
+Each mechanism has a specific purpose.
+
+---
+
+# 12. Interview Answer
+
+If asked:
+
+> **"How do ViewModels communicate with each other?"**
+
+A strong architect-level answer is:
+
+> **"I avoid making ViewModels directly dependent on each other unless there is a genuine parent-child presentation relationship. For navigation, a ViewModel communicates with a navigation abstraction, and the navigation manager resolves the destination ViewModel. For notifications across independent modules, I use an event or message mechanism. For shared business data or operations, I use an application service that both ViewModels depend on. Direct parent-to-child ViewModel communication is appropriate when the parent explicitly owns and coordinates the child."**
+
+Then add:
+
+> **"I also treat event subscriptions as part of the ViewModel lifecycle. When a ViewModel becomes active I establish subscriptions, and when it becomes inactive I remove them or dispose the subscription, so a long-lived publisher doesn't accidentally retain the ViewModel."**
+
+---
+
+# 13. One Diagram to Remember
+
+```text
+                    Shell / Navigation
+                           │
+                    NavigationService
+                           │
+             ┌─────────────┴─────────────┐
+             ↓                           ↓
+      CustomerViewModel            OrderViewModel
+             │                           │
+             │                           │
+             ├──────→ ApplicationService ←──────┤
+             │
+             └──────→ MessageBus ───────────────→
+                         CustomerChanged
+```
+
+The key principle is:
+
+> **Don't use ViewModels as the communication infrastructure of the application. Use the appropriate architectural boundary for the type of communication.**
+
+
